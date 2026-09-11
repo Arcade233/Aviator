@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Aviator Game</title>
+    <!-- Socket.io Client Library -->
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
     <style>
         :root {
             --bg-dark: #0e0e0e;
@@ -116,6 +118,41 @@
 
         .history-item.blue { color: #3498db; }
         .history-item.purple { color: #9b59b6; }
+
+        /* Live Players Indicator Bar */
+        .live-players-bar {
+            height: 28px;
+            background: #111213;
+            display: flex;
+            align-items: center;
+            padding: 0 12px;
+            gap: 10px;
+            border-bottom: 1px solid var(--border-color);
+            font-size: 11px;
+            color: var(--text-muted);
+        }
+
+        .avatar-circle {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background-color: #e50914;
+            color: #fff;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 9px;
+            transition: background-color 0.4s ease;
+        }
+
+        .live-status-dot {
+            width: 6px;
+            height: 6px;
+            background-color: #28a745;
+            border-radius: 50%;
+            box-shadow: 0 0 6px #28a745;
+        }
 
         /* Main Game Layout */
         .main-content {
@@ -366,7 +403,6 @@
         input:checked + .slider { background-color: var(--accent-green); }
         input:checked + .slider:before { transform: translateX(16px); }
 
-        /* Responsive Design */
         @media (max-width: 768px) {
             .controls-container {
                 grid-template-columns: 1fr;
@@ -407,6 +443,13 @@
         <div class="history-item blue">1.05x</div>
         <div class="history-item purple">8.12x</div>
         <div class="history-item blue">1.45x</div>
+    </div>
+
+    <!-- Live Players Activity Bar -->
+    <div class="live-players-bar">
+        <div class="live-status-dot"></div>
+        <div class="avatar-circle" id="player-avatar">AK</div>
+        <span><strong id="active-players-count">142</strong> players placed bets</span>
     </div>
 
     <!-- Main Game Area -->
@@ -501,23 +544,48 @@
         </div>
     </div>
 </div>
-      <script>
+
+<script>
+    // Auto-connect to host server backend
+    const socket = io();
+
     let selectedCurrency = "GHS";
-    let liveBalance = 300.00;
+    let liveBalance = 30000.00;
     
-    // Track betting states: 'none', 'placed', 'queued', 'cashed_out'
     let bets = { 
-        1: { amount: 1.00, state: 'none', placedMultiplier: 1.00 }, 
-        2: { amount: 1.00, state: 'none', placedMultiplier: 1.00 } 
+        1: { amount: 1.00, state: 'none' }, 
+        2: { amount: 1.00, state: 'none' } 
     };
 
     let currentMultiplier = 1.00;
-    let crashPoint = 1.00;
-    let roundPhase = 'WAITING'; // 'WAITING', 'RUNNING', 'CRASHED'
-    let animationFrameId = null;
+    let roundPhase = 'WAITING';
+    let flightStartTime = 0;
     let bannerTimeout = null;
 
-    // Canvas & Graphics Setup
+    // Simulated Players Avatar Cycling
+    const sampleAvatars = [
+        { init: 'AK', bg: '#e50914' },
+        { init: 'JD', bg: '#2980b9' },
+        { init: 'PX', bg: '#8e44ad' },
+        { init: 'MR', bg: '#27ae60' },
+        { init: 'SK', bg: '#d35400' }
+    ];
+    let avatarIndex = 0;
+
+    setInterval(() => {
+        avatarIndex = (avatarIndex + 1) % sampleAvatars.length;
+        const avEl = document.getElementById('player-avatar');
+        if (avEl) {
+            avEl.textContent = sampleAvatars[avatarIndex].init;
+            avEl.style.backgroundColor = sampleAvatars[avatarIndex].bg;
+        }
+        const countEl = document.getElementById('active-players-count');
+        if (countEl) {
+            countEl.textContent = Math.floor(120 + Math.random() * 65);
+        }
+    }, 2500);
+
+    // Canvas Graphics Setup
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
     const gameScreen = document.getElementById('game-screen');
@@ -539,7 +607,6 @@
     const currTagEl = document.getElementById('curr-tag');
     const historyRibbon = document.getElementById('history-ribbon');
 
-    // Initialize Currency Switcher
     currSelectEl.addEventListener('change', (e) => {
         selectedCurrency = e.target.value;
         currTagEl.textContent = selectedCurrency;
@@ -547,7 +614,6 @@
         updateUI();
     });
 
-    // Bet Adjustment Controls
     function adjustBet(boxNum, delta) {
         if (bets[boxNum].state !== 'none' && bets[boxNum].state !== 'queued') return;
         bets[boxNum].amount = Math.max(1.00, parseFloat((bets[boxNum].amount + delta).toFixed(2)));
@@ -578,7 +644,6 @@
         }
     }
 
-    // Action Button Logic
     function handleBetClick(boxNum) {
         const bet = bets[boxNum];
 
@@ -594,7 +659,6 @@
             }
         } else if (roundPhase === 'RUNNING') {
             if (bet.state === 'none') {
-                // Queue for next round
                 if (liveBalance >= bet.amount) {
                     liveBalance -= bet.amount;
                     bet.state = 'queued';
@@ -603,7 +667,6 @@
                 liveBalance += bet.amount;
                 bet.state = 'none';
             } else if (bet.state === 'placed') {
-                // Cash Out
                 const winAmount = parseFloat((bet.amount * currentMultiplier).toFixed(2));
                 liveBalance += winAmount;
                 bet.state = 'cashed_out';
@@ -653,7 +716,6 @@
         updateButtonState(2);
     }
 
-    // Cash Out Popup Banner
     function showCashoutBanner(mult, winAmt) {
         const banner = document.getElementById('cashout-banner');
         document.getElementById('banner-mult-val').textContent = `${mult.toFixed(2)}x`;
@@ -661,120 +723,88 @@
         banner.style.display = 'flex';
 
         if (bannerTimeout) clearTimeout(bannerTimeout);
-        bannerTimeout = setTimeout(() => { hideBanner(); }, 3500);
+        bannerTimeout = setTimeout(() => { banner.style.display = 'none'; }, 3500);
     }
 
-    function hideBanner() {
-        document.getElementById('cashout-banner').style.display = 'none';
-    }
+    // Backend Socket Event Synchronization
+    socket.on('init_state', (data) => {
+        applyState(data.phase, data.multiplier, data.countdown);
+    });
 
-    // Game Core Loop
-    function startWaitingPhase() {
-        roundPhase = 'WAITING';
-        currentMultiplier = 1.00;
-        
-        // Resolve queued bets into active bets
-        [1, 2].forEach(i => {
-            if (bets[i].state === 'queued') bets[i].state = 'placed';
-            if (bets[i].state === 'cashed_out') bets[i].state = 'none';
-        });
+    socket.on('game_state', (data) => {
+        applyState(data.phase, data.crashPoint, data.countdown);
+    });
 
-        multValText.style.display = 'none';
-        flewAwayText.style.display = 'none';
-        waitingText.style.display = 'block';
-        updateUI();
+    socket.on('waiting_tick', (data) => {
+        waitingText.textContent = `Waiting for next round (${data.countdown}s)`;
+    });
 
-        let countdown = 5.0;
-        const interval = setInterval(() => {
-            countdown -= 0.1;
-            if (countdown <= 0) {
-                clearInterval(interval);
-                startFlightPhase();
-            }
-        }, 100);
-    }
-
-    function generateCrashPoint() {
-        const e = 100;
-        const r = Math.random() * e;
-        if (r < 3) return 1.00; // Instant crash ~3% of the time
-        return parseFloat((Math.max(1.00, (100 / (100 - r)))).toFixed(2));
-    }
-
-    function startFlightPhase() {
-        roundPhase = 'RUNNING';
-        crashPoint = generateCrashPoint();
-        currentMultiplier = 1.00;
-
-        waitingText.style.display = 'none';
-        flewAwayText.style.display = 'none';
-        multValText.style.display = 'block';
-        multValText.style.color = '#ffffff';
-
-        let startTime = performance.now();
-
-        function step(now) {
-            let elapsed = (now - startTime) / 1000;
-            currentMultiplier = parseFloat((Math.pow(Math.E, 0.06 * elapsed)).toFixed(2));
-
-            // Auto cash out checking
-            [1, 2].forEach(i => {
-                const autoToggle = document.getElementById(`auto-cashout-toggle-${i}`);
-                if (bets[i].state === 'placed' && autoToggle && autoToggle.checked) {
-                    if (currentMultiplier >= 2.00) {
-                        const winAmount = parseFloat((bets[i].amount * 2.00).toFixed(2));
-                        liveBalance += winAmount;
-                        bets[i].state = 'cashed_out';
-                        showCashoutBanner(2.00, winAmount);
-                    }
-                }
-            });
-
-            if (currentMultiplier >= crashPoint) {
-                currentMultiplier = crashPoint;
-                triggerCrash();
-            } else {
-                multValText.textContent = `${currentMultiplier.toFixed(2)}x`;
-                drawFlightAnimation(elapsed);
-                updateUI();
-                animationFrameId = requestAnimationFrame(step);
-            }
-        }
-        animationFrameId = requestAnimationFrame(step);
-    }
-
-    function triggerCrash() {
-        roundPhase = 'CRASHED';
-        cancelAnimationFrame(animationFrameId);
-
+    socket.on('multiplier_tick', (data) => {
+        if (roundPhase !== 'RUNNING') applyState('RUNNING', data.multiplier);
+        currentMultiplier = parseFloat(data.multiplier);
         multValText.textContent = `${currentMultiplier.toFixed(2)}x`;
-        multValText.style.color = '#e50914';
-        flewAwayText.style.display = 'block';
 
-        // Add outcome to top ribbon
-        const item = document.createElement('div');
-        item.className = `history-item ${currentMultiplier >= 2.0 ? 'purple' : 'blue'}`;
-        item.textContent = `${currentMultiplier.toFixed(2)}x`;
-        historyRibbon.insertBefore(item, historyRibbon.firstChild);
-        if (historyRibbon.children.length > 10) historyRibbon.removeChild(historyRibbon.lastChild);
-
-        // Reset lost bets
+        // Check Auto Cashout
         [1, 2].forEach(i => {
-            if (bets[i].state === 'placed') bets[i].state = 'none';
+            const autoToggle = document.getElementById(`auto-cashout-toggle-${i}`);
+            if (bets[i].state === 'placed' && autoToggle && autoToggle.checked) {
+                if (currentMultiplier >= 2.00) {
+                    const winAmount = parseFloat((bets[i].amount * 2.00).toFixed(2));
+                    liveBalance += winAmount;
+                    bets[i].state = 'cashed_out';
+                    showCashoutBanner(2.00, winAmount);
+                }
+            }
         });
 
+        drawFlightAnimation(data.elapsed || 1.0);
         updateUI();
-        setTimeout(startWaitingPhase, 3000);
+    });
+
+    function applyState(phase, val, cd) {
+        roundPhase = phase;
+
+        if (phase === 'WAITING') {
+            [1, 2].forEach(i => {
+                if (bets[i].state === 'queued') bets[i].state = 'placed';
+                if (bets[i].state === 'cashed_out') bets[i].state = 'none';
+            });
+            multValText.style.display = 'none';
+            flewAwayText.style.display = 'none';
+            waitingText.style.display = 'block';
+            waitingText.textContent = cd ? `Waiting for next round (${cd}s)` : 'Waiting for next round';
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+        } else if (phase === 'RUNNING') {
+            waitingText.style.display = 'none';
+            flewAwayText.style.display = 'none';
+            multValText.style.display = 'block';
+            multValText.style.color = '#ffffff';
+        } else if (phase === 'CRASHED') {
+            multValText.style.color = '#e50914';
+            flewAwayText.style.display = 'block';
+
+            if (val) {
+                const item = document.createElement('div');
+                const m = parseFloat(val);
+                item.className = `history-item ${m >= 2.0 ? 'purple' : 'blue'}`;
+                item.textContent = `${m.toFixed(2)}x`;
+                historyRibbon.insertBefore(item, historyRibbon.firstChild);
+                if (historyRibbon.children.length > 10) historyRibbon.removeChild(historyRibbon.lastChild);
+            }
+
+            [1, 2].forEach(i => {
+                if (bets[i].state === 'placed') bets[i].state = 'none';
+            });
+        }
+        updateUI();
     }
 
-    // Canvas Graphics Rendering
     function drawFlightAnimation(time) {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
         const w = canvas.width;
         const h = canvas.height;
 
-        // Draw Curved Path
         const startX = 20;
         const startY = h - 30;
         const endX = Math.min(w - 50, startX + time * 25);
@@ -783,7 +813,6 @@
         const cpX = startX + (endX - startX) * 0.5;
         const cpY = startY;
 
-        // Draw Fill Gradient Under Curve
         ctx.beginPath();
         ctx.moveTo(startX, startY);
         ctx.quadraticCurveTo(cpX, cpY, endX, endY);
@@ -796,7 +825,6 @@
         ctx.fillStyle = gradient;
         ctx.fill();
 
-        // Draw Stroke Line
         ctx.beginPath();
         ctx.moveTo(startX, startY);
         ctx.quadraticCurveTo(cpX, cpY, endX, endY);
@@ -804,7 +832,6 @@
         ctx.lineWidth = 3.5;
         ctx.stroke();
 
-        // Draw Plane Dot
         ctx.beginPath();
         ctx.arc(endX, endY, 6, 0, Math.PI * 2);
         ctx.fillStyle = '#ffffff';
@@ -813,9 +840,6 @@
         ctx.fill();
         ctx.shadowBlur = 0;
     }
-
-    // Initial Start
-    startWaitingPhase();
 </script>
 </body>
 </html>
